@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Visualizing Dirac Notation: The Inner Product</title>
+    <style>
+        :root {
+            --bg-color: #0a0a0f;
+            --text-color: #a0a0a0;
+            --accent-a: #00ffcc; /* Cyan for Bra <a| */
+            --accent-b: #ff0077; /* Magenta for Ket |b> */
+            --result-color: #ffffff;
+            --font-main: 'Courier New', Courier, monospace;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: var(--font-main);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+        }
+
+        #canvas-container {
+            position: relative;
+            box-shadow: 0 0 50px rgba(0,0,0,0.5);
+            border: 1px solid #333;
+        }
+
+        canvas {
+            background: radial-gradient(circle at center, #1a1a24 0%, #000000 100%);
+            cursor: crosshair;
+            display: block;
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            pointer-events: none;
+        }
+
+        h1 {
+            font-size: 1.2rem;
+            margin: 0 0 10px 0;
+            color: #fff;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+
+        .readout {
+            font-size: 0.9rem;
+            line-height: 1.5;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px;
+            border-left: 2px solid var(--accent-a);
+        }
+
+        .math-val { color: #fff; font-weight: bold; }
+        .val-a { color: var(--accent-a); }
+        .val-b { color: var(--accent-b); }
+
+        #controls {
+            margin-top: 20px;
+            display: flex;
+            gap: 20px;
+            z-index: 10;
+        }
+
+        button {
+            background: transparent;
+            border: 1px solid var(--accent-a);
+            color: var(--accent-a);
+            padding: 10px 20px;
+            font-family: var(--font-main);
+            font-size: 1rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        button:hover {
+            background: var(--accent-a);
+            color: #000;
+            box-shadow: 0 0 15px var(--accent-a);
+        }
+
+        button.action-btn {
+            border-color: var(--result-color);
+            color: var(--result-color);
+        }
+        button.action-btn:hover {
+            background: var(--result-color);
+            box-shadow: 0 0 20px var(--result-color);
+        }
+
+        #status {
+            position: absolute;
+            bottom: 20px;
+            font-size: 0.8rem;
+            opacity: 0.7;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="canvas-container">
+        <canvas id="mainCanvas" width="800" height="600"></canvas>
+        <div id="ui-layer">
+            <h1>Dirac Notation Lab</h1>
+            <div class="readout">
+                <div>State |a⟩: <span class="val-a">Fixed Reference</span></div>
+                <div>State |b⟩: <span class="val-b">Variable State</span></div>
+                <div style="margin-top:10px; border-top:1px solid #555; padding-top:5px;">
+                    Probability Amplitude:<br>
+                    <span style="font-size: 1.4rem;">⟨a|b⟩ = <span id="scalar-val" class="math-val">0.00</span></span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="controls">
+        <button id="btn-start">Initialize Audio Engine</button>
+        <button id="btn-collapse" class="action-btn" disabled>Collapse (Spacebar)</button>
+    </div>
+
+    <div id="status">Audio Context: Inactive</div>
+
+    <script>
+        /**
+         * AURA LABS - PHYSICS DEMO
+         * "Reality is randomness; Order is a filter."
+         */
+
+        // --- CONFIG ---
+        const C = {
+            center: { x: 400, y: 300 },
+            vecLen: 200,
+            colorA: '#00ffcc',
+            colorB: '#ff0077',
+            baseFreq: 110, // A2 (Low drone)
+            harmonicRatio: 1.5 // Perfect fifth
+        };
+
+        // --- STATE ---
+        let mouse = { x: C.center.x + C.vecLen, y: C.center.y };
+        let vectorB = { x: 1, y: 0 }; // Normalized direction
+        let angle = 0; // Angle between A and B
+        let dotProduct = 1.0;
+        let isAnimating = false;
+        let animT = 0; // Animation time 0.0 -> 1.0
+        let audioCtx = null;
+        let isAudioInit = false;
+
+        // Audio Nodes
+        let oscA, oscB, gainA, gainB, masterGain;
+        
+        // --- DOM ---
+        const canvas = document.getElementById('mainCanvas');
+        const ctx = canvas.getContext('2d');
+        const valDisplay = document.getElementById('scalar-val');
+        const btnStart = document.getElementById('btn-start');
+        const btnCollapse = document.getElementById('btn-collapse');
+        const statusDisplay = document.getElementById('status');
+
+        // --- INPUT HANDLERS ---
+        canvas.addEventListener('mousemove', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            mouse.x = e.clientX - rect.left;
+            mouse.y = e.clientY - rect.top;
+            updateVectorMath();
+            updateAudioParams();
+        });
+
+        btnStart.addEventListener('click', async () => {
+            if (!isAudioInit) {
+                initAudio();
+                isAudioInit = true;
+                btnStart.style.display = 'none';
+                btnCollapse.disabled = false;
+                statusDisplay.textContent = "Audio Context: Active | Move mouse to perturb state.";
+            }
+        });
+
+        btnCollapse.addEventListener('click', triggerCollapse);
+        document.addEventListener('keydown', (e) => {
+            if (e.code === 'Space' && isAudioInit) triggerCollapse();
+        });
+
+        // --- MATH & LOGIC ---
+        function updateVectorMath() {
+            // Vector A is always (1, 0) - Horizontal Right
+            
+            // Calculate Vector B from mouse relative to center
+            let dx = mouse.x - C.center.x;
+            let dy = mouse.y - C.center.y;
+            let mag = Math.sqrt(dx*dx + dy*dy);
+            
+            if (mag === 0) mag = 1; // Prevent NaN
+
+            // Normalize B for the math, but keep magnitude for visuals if desired
+            // For this demo, let's normalize the "state" vectors to length 1 (Unit Vectors)
+            // But render them with C.vecLen
+            vectorB.x = dx / mag;
+            vectorB.y = dy / mag;
+
+            // Dot Product of Unit Vectors: A . B = (1)(bx) + (0)(by) = bx
+            // Since A is (1,0), the dot product is simply the x-component of B projected on x-axis
+            dotProduct = vectorB.x; 
+            
+            // Clamp for safety
+            if (dotProduct > 1) dotProduct = 1;
+            if (dotProduct < -1) dotProduct = -1;
+
+            // Calculate Angle
+            angle = Math.acos(dotProduct);
+            
+            // Update UI
+            valDisplay.textContent = dotProduct.toFixed(3);
+        }
+
+        // --- AUDIO ENGINE ---
+        function initAudio() {
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            audioCtx = new AudioContext();
+            masterGain = audioCtx.createGain();
+            masterGain.gain.value = 0.3; // Safe volume
+            masterGain.connect(audioCtx.destination);
+
+            // DRONE (Vector A) - The "Ground Truth"
+            oscA = audioCtx.createOscillator();
+            oscA.type = 'sine';
+            oscA.frequency.value = C.baseFreq; 
+            gainA = audioCtx.createGain();
+            gainA.gain.value = 0.5;
+            oscA.connect(gainA).connect(masterGain);
+            oscA.start();
+
+            // HARMONY (Vector B) - The "Perturbation"
+            oscB = audioCtx.createOscillator();
+            oscB.type = 'triangle'; // Richer texture
+            gainB = audioCtx.createGain();
+            gainB.gain.value = 0.3;
+            // Filter B to make it less harsh
+            const filterB = audioCtx.createBiquadFilter();
+            filterB.type = 'lowpass';
+            filterB.frequency.value = 1000;
+            
+            oscB.connect(filterB).connect(gainB).connect(masterGain);
+            oscB.start();
+            
+            updateAudioParams();
+        }
+
+        function updateAudioParams() {
+            if (!audioCtx) return;
+
+            // Map Angle to Dissonance
+            // 0 deg = Unison (Ratio 1.0)
+            // 90 deg = Maximum Dissonance / Tension (Let's use a Tritone or dim5 approx 1.41)
+            // 180 deg = Lower Octave? Or Phase cancellation? 
+            
+            // Let's model "Frequency Shift" based on angular distance
+            // 0 -> 1.0 (Unison)
+            // 90 -> 1.5 (Fifth) - Consonant, but distinct
+            // Let's actually use Detune for a "Phasing" effect
+            
+            // New approach: 
+            // 0 degrees: Perfectly in tune
+            // 90 degrees: Detuned by 100 cents (Semitone) -> Tension
+            // 180 degrees: Detuned by 600 cents (Tritone) -> Chaos
+            
+            // Let's use the dotProduct (-1 to 1)
+            // 1.0 = 0 detune
+            // 0.0 = High detune
+            
+            const tension = 1.0 - Math.abs(dotProduct); // 0 at parallel, 1 at orthogonal
+            
+            // Frequency modulation
+            // Base + (Tension * 200Hz)
+            const targetFreq = C.baseFreq + (tension * (C.baseFreq * 0.5));
+            oscB.frequency.setTargetAtTime(targetFreq, audioCtx.currentTime, 0.1);
+
+            // Amplitude Modulation (Stereo Panning?)
+            // Let's keep it simple: Volume drops slightly when orthogonal
+            // gainB.gain.setTargetAtTime(0.3 * (0.5 + 0.5*Math.abs(dotProduct)), audioCtx.currentTime, 0.1);
+        }
+
+        function triggerCollapse() {
+            if (!audioCtx) return;
+            isAnimating = true;
+            animT = 0;
+
+            // --- THE COLLAPSE SOUND ---
+            // Concept: Extracting signal from noise based on correlation.
+            
+            const t = audioCtx.currentTime;
+            const magnitude = Math.abs(dotProduct); // 0.0 to 1.0
+
+            // 1. Noise Burst (The randomness)
+            const bufferSize = audioCtx.sampleRate * 2; // 2 seconds
+            const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+            const data = buffer.getChannelData(0);
+            for (let i = 0; i < bufferSize; i++) {
+                data[i] = Math.random() * 2 - 1;
+            }
+
+            const noiseNode = audioCtx.createBufferSource();
+            noiseNode.buffer = buffer;
+
+            // 2. Resonant Filter (The "Structure" / Vector A)
+            // High Q = High Selectivity = Long Ring (Like a bell)
+            // Low Q = Low Selectivity = Dull Thud
+            const filter = audioCtx.createBiquadFilter();
+            filter.type = 'bandpass';
+            filter.frequency.value = C.baseFreq * 4; // Higher harmonic ping
+            
+            // Q Map: Parallel (1.0) -> Q=50 (Ring), Orthogonal (0.0) -> Q=0.5 (Thud)
+            const Q = 0.5 + (Math.pow(magnitude, 2) * 80); 
+            filter.Q.value = Q;
+
+            // 3. Envelope
+            const noiseGain = audioCtx.createGain();
+            
+            // Duration Map: Parallel -> Long, Orthogonal -> Short
+            const decayTime = 0.1 + (magnitude * 1.5);
+
+            noiseGain.gain.setValueAtTime(0, t);
+            noiseGain.gain.linearRampToValueAtTime(1.0, t + 0.01); // Attack
+            noiseGain.gain.exponentialRampToValueAtTime(0.001, t + decayTime); // Decay
+
+            // Connect graph
+            noiseNode.connect(filter).connect(noiseGain).connect(masterGain);
+            noiseNode.start(t);
+            noiseNode.stop(t + 2.0);
+
+            // --- VISUAL ANIMATION LOOP ---
+            requestAnimationFrame(animateCollapse);
+        }
+
+        function animateCollapse() {
+            animT += 0.05;
+            
+            if (animT >= 1.0) {
+                isAnimating = false;
+                animT = 0;
+                draw(); // Final frame
+                return;
+            }
+
+            draw();
+            requestAnimationFrame(animateCollapse);
+        }
+
+        // --- RENDERING ---
+        function draw() {
+            // Clear
+            ctx.fillStyle = C.bg_color || '#0a0a0f'; // Fallback
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Coordinate System (Faint Grid)
+            ctx.strokeStyle = '#222';
+            ctx.beginPath();
+            ctx.moveTo(0, C.center.y); ctx.lineTo(canvas.width, C.center.y);
+            ctx.moveTo(C.center.x, 0); ctx.lineTo(C.center.x, canvas.height);
+            ctx.stroke();
+
+            // Draw Vector A (Fixed)
+            drawVector({x: 1, y: 0}, C.colorA, 1.0, " |a⟩");
+
+            // Draw Vector B (Dynamic)
+            drawVector(vectorB, C.colorB, 1.0, " |b⟩");
+
+            // --- THE PROJECTION ANIMATION ---
+            if (isAnimating || true) { // Always show projection faint, animate brightness on click
+                
+                const alpha = isAnimating ? 1.0 - Math.pow(animT - 0.5, 2)*4 : 0.3; // Pulse if animating
+                
+                // Calculate Projection Point on A
+                // Proj = (A.B) * A
+                // Since A is (1,0), Proj is (dotProduct, 0)
+                const projX = C.center.x + (dotProduct * C.vecLen);
+                const projY = C.center.y;
+
+                const tipBX = C.center.x + (vectorB.x * C.vecLen);
+                const tipBY = C.center.y + (vectorB.y * C.vecLen);
+
+                // 1. Draw dashed line from B to A (The "Filtering" action)
+                ctx.setLineDash([5, 5]);
+                ctx.strokeStyle = `rgba(255, 255, 255, ${alpha})`;
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(tipBX, tipBY);
+                ctx.lineTo(projX, projY);
+                ctx.stroke();
+                ctx.setLineDash([]);
+
+                // 2. Highlight the Inner Product (The segment on A)
+                // Color maps: Green (Positive), Red (Negative)
+                const resultColor = dotProduct >= 0 ? '#00ff00' : '#ff3300';
+                
+                // Bloom effect during animation
+                if (isAnimating) {
+                    ctx.shadowBlur = 20 * (1-animT);
+                    ctx.shadowColor = resultColor;
+                }
+
+                ctx.strokeStyle = resultColor;
+                ctx.lineWidth = 6;
+                ctx.beginPath();
+                ctx.moveTo(C.center.x, C.center.y);
+                ctx.lineTo(projX, projY);
+                ctx.stroke();
+
+                ctx.shadowBlur = 0; // Reset
+            }
+        }
+
+        function drawVector(vec, color, opacity, label) {
+            const endX = C.center.x + (vec.x * C.vecLen);
+            const endY = C.center.y + (vec.y * C.vecLen); // y is down in canvas, but let's just use raw coords
+
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(C.center.x, C.center.y);
+            ctx.lineTo(endX, endY);
+            ctx.stroke();
+
+            // Arrowhead
+            const headLen = 15;
+            const angle = Math.atan2(vec.y, vec.x);
+            ctx.beginPath();
+            ctx.moveTo(endX, endY);
+            ctx.lineTo(endX - headLen * Math.cos(angle - Math.PI / 6), endY - headLen * Math.sin(angle - Math.PI / 6));
+            ctx.lineTo(endX - headLen * Math.cos(angle + Math.PI / 6), endY - headLen * Math.sin(angle + Math.PI / 6));
+            ctx.fillStyle = color;
+            ctx.fill();
+
+            // Label
+            ctx.fillStyle = "#fff";
+            ctx.font = "16px monospace";
+            ctx.fillText(label, endX + 10, endY);
+        }
+
+        // Initial Draw
+        draw();
+
+    </script>
+</body>
+</html>

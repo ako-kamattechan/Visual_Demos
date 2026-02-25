@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Wavefunction Collapse Visualization</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #050505; font-family: 'Courier New', monospace; }
+        #canvas-container { width: 100vw; height: 100vh; }
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: rgba(255, 255, 255, 0.8);
+            pointer-events: none;
+            max-width: 400px;
+        }
+        h1 { font-size: 14px; letter-spacing: 2px; text-transform: uppercase; margin: 0 0 10px 0; color: #00ffff; }
+        p { font-size: 12px; line-height: 1.4; color: #aaa; margin-bottom: 8px; }
+        .highlight { color: #fff; font-weight: bold; }
+        #readout {
+            margin-top: 15px;
+            border-left: 2px solid #ff0055;
+            padding-left: 10px;
+            background: rgba(0,0,0,0.5);
+        }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+    <div id="ui">
+        <h1>The Cursor of Reality</h1>
+        <p><strong>Red Particles:</strong> The "Field" of Infinite Potential (High Entropy / Chaos).</p>
+        <p><strong>Blue Plane:</strong> The "Filter" or "Now" (The Observer / Constraint).</p>
+        <p><strong>Interaction:</strong> Only where Potential intersects the Filter does "Structure" emerge.</p>
+        <div id="readout">
+            <div>Total Potentials: <span class="highlight">2000</span></div>
+            <div>Collapsed States: <span class="highlight" id="collapsed-count">0</span></div>
+            <div>Entropy: <span class="highlight" id="entropy-val">High</span></div>
+        </div>
+    </div>
+    <div id="canvas-container"></div>
+
+    <script>
+        // --- SCENE SETUP ---
+        const scene = new THREE.Scene();
+        scene.fog = new THREE.FogExp2(0x050505, 0.002);
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.z = 50;
+        camera.position.y = 20;
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+        // --- THE "FILTER" PLANE (The Observer / <a|) ---
+        // A visual representation of the constraint
+        const planeGeometry = new THREE.PlaneGeometry(60, 60, 10, 10);
+        const planeMaterial = new THREE.MeshBasicMaterial({ 
+            color: 0x00ffff, 
+            side: THREE.DoubleSide, 
+            transparent: true, 
+            opacity: 0.1,
+            wireframe: true
+        });
+        const filterPlane = new THREE.Mesh(planeGeometry, planeMaterial);
+        filterPlane.rotation.x = Math.PI / 2; // Flat horizontal plane
+        scene.add(filterPlane);
+
+        // Add a glow to the plane
+        const planeGlowGeo = new THREE.PlaneGeometry(60, 60);
+        const planeGlowMat = new THREE.MeshBasicMaterial({
+            color: 0x00ffff,
+            transparent: true,
+            opacity: 0.05,
+            side: THREE.DoubleSide,
+            blending: THREE.AdditiveBlending
+        });
+        const planeGlow = new THREE.Mesh(planeGlowGeo, planeGlowMat);
+        planeGlow.rotation.x = Math.PI / 2;
+        scene.add(planeGlow);
+
+
+        // --- THE "CLOUD" OF POTENTIAL (The Wavefunction / |b>) ---
+        const particleCount = 2000;
+        const particlesGeometry = new THREE.BufferGeometry();
+        const positions = new Float32Array(particleCount * 3);
+        const colors = new Float32Array(particleCount * 3);
+        const sizes = new Float32Array(particleCount);
+        const velocities = []; // Store custom velocity data
+
+        const colorChaos = new THREE.Color(0xff0055); // Red/Pink
+        const colorOrder = new THREE.Color(0x00ffff); // Cyan
+
+        for (let i = 0; i < particleCount; i++) {
+            // Random distribution in a sphere/cloud
+            const r = 40 * Math.cbrt(Math.random());
+            const theta = Math.random() * 2 * Math.PI;
+            const phi = Math.acos(2 * Math.random() - 1);
+
+            const x = r * Math.sin(phi) * Math.cos(theta);
+            const y = (Math.random() - 0.5) * 60; // Spread vertically
+            const z = r * Math.sin(phi) * Math.sin(theta);
+
+            positions[i * 3] = x;
+            positions[i * 3 + 1] = y;
+            positions[i * 3 + 2] = z;
+
+            // Initial Colors (Chaos)
+            colors[i * 3] = colorChaos.r;
+            colors[i * 3 + 1] = colorChaos.g;
+            colors[i * 3 + 2] = colorChaos.b;
+
+            sizes[i] = 0.5;
+
+            // Random movement data
+            velocities.push({
+                x: (Math.random() - 0.5) * 0.2,
+                y: (Math.random() - 0.5) * 0.2,
+                z: (Math.random() - 0.5) * 0.2,
+                originalX: x, // To tether them slightly so they don't fly away forever
+                originalY: y,
+                originalZ: z
+            });
+        }
+
+        particlesGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        particlesGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+        particlesGeometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
+
+        // Shader Material for glowing particles
+        const particleMaterial = new THREE.PointsMaterial({
+            size: 0.8,
+            vertexColors: true,
+            blending: THREE.AdditiveBlending,
+            depthTest: false,
+            transparent: true
+        });
+
+        const particleSystem = new THREE.Points(particlesGeometry, particleMaterial);
+        scene.add(particleSystem);
+
+
+        // --- ANIMATION LOOP ---
+        let time = 0;
+        const uiCount = document.getElementById('collapsed-count');
+        const uiEntropy = document.getElementById('entropy-val');
+
+        function animate() {
+            requestAnimationFrame(animate);
+            time += 0.01;
+
+            const positions = particleSystem.geometry.attributes.position.array;
+            const colors = particleSystem.geometry.attributes.color.array;
+            let collapsedCount = 0;
+
+            // Rotate the entire particle system slowly to simulate the user rotating the "object"
+            // particleSystem.rotation.y += 0.002; 
+
+            for (let i = 0; i < particleCount; i++) {
+                const ix = i * 3;
+                const iy = i * 3 + 1;
+                const iz = i * 3 + 2;
+
+                // 1. Update Positions based on Chaos (Brownian Motion)
+                let vx = velocities[i].x;
+                let vy = velocities[i].y;
+                let vz = velocities[i].z;
+
+                // Apply velocity
+                positions[ix] += vx;
+                positions[iy] += vy;
+                positions[iz] += vz;
+
+                // Tether to center (Gravity of potential)
+                positions[ix] += (0 - positions[ix]) * 0.005;
+                positions[iy] += (0 - positions[iy]) * 0.005;
+                positions[iz] += (0 - positions[iz]) * 0.005;
+
+                // --- THE COLLAPSE LOGIC ---
+                // Calculate distance to the Plane (y = 0 relative to particle system)
+                // We need the world position of the particle relative to the plane.
+                // Since plane is at y=0 and flat, we just check the particle's Y coordinate relative to rotation.
+                
+                // Get World Position roughly (ignoring complex matrix for performance)
+                // Let's assume the plane is the "Filter" at Y=0.
+                const distToPlane = Math.abs(positions[iy]); 
+                const threshold = 1.5; // How thick is the "Reality Slice"?
+
+                if (distToPlane < threshold) {
+                    // ** COLLAPSED STATE ** (Inside the Filter)
+                    collapsedCount++;
+
+                    // Snap to Grid (The "Crystallization" of Order)
+                    // We gently nudge them towards integer coordinates to visualize "Order"
+                    positions[ix] += (Math.round(positions[ix]/2)*2 - positions[ix]) * 0.1;
+                    positions[iz] += (Math.round(positions[iz]/2)*2 - positions[iz]) * 0.1;
+                    
+                    // Slow down (Cooling / Low Entropy)
+                    positions[iy] *= 0.9; 
+
+                    // Color: Cyan (Order)
+                    colors[ix] = colorOrder.r;
+                    colors[iy] = colorOrder.g;
+                    colors[iz] = colorOrder.b;
+
+                } else {
+                    // ** POTENTIAL STATE ** (Outside the Filter)
+                    
+                    // Color: Red (Chaos)
+                    // Lerp back to red
+                    colors[ix] += (colorChaos.r - colors[ix]) * 0.05;
+                    colors[iy] += (colorChaos.g - colors[iy]) * 0.05;
+                    colors[iz] += (colorChaos.b - colors[iz]) * 0.05;
+                }
+            }
+
+            particleSystem.geometry.attributes.position.needsUpdate = true;
+            particleSystem.geometry.attributes.color.needsUpdate = true;
+
+            // UI Update
+            uiCount.innerText = collapsedCount;
+            if (collapsedCount > 100) {
+                uiEntropy.innerText = "Reducing...";
+                uiEntropy.style.color = "#00ffff";
+            } else {
+                uiEntropy.innerText = "High";
+                uiEntropy.style.color = "#ff0055";
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        animate();
+
+        // --- MOUSE CONTROL ---
+        let isDragging = false;
+        let previousMousePosition = { x: 0, y: 0 };
+
+        document.addEventListener('mousedown', () => isDragging = true);
+        document.addEventListener('mouseup', () => isDragging = false);
+        document.addEventListener('mousemove', (e) => {
+            if (isDragging) {
+                const deltaMove = {
+                    x: e.offsetX - previousMousePosition.x,
+                    y: e.offsetY - previousMousePosition.y
+                };
+
+                // Rotate the camera around the center
+                const rotSpeed = 0.005;
+                const x = camera.position.x;
+                const z = camera.position.z;
+
+                camera.position.x = x * Math.cos(deltaMove.x * rotSpeed) - z * Math.sin(deltaMove.x * rotSpeed);
+                camera.position.z = x * Math.sin(deltaMove.x * rotSpeed) + z * Math.cos(deltaMove.x * rotSpeed);
+                
+                camera.lookAt(scene.position);
+            }
+            previousMousePosition = { x: e.offsetX, y: e.offsetY };
+        });
+
+        // Zoom
+        document.addEventListener('wheel', (e) => {
+            camera.position.z += e.deltaY * 0.05;
+        });
+
+        // Window Resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+    </script>
+</body>
+</html>
